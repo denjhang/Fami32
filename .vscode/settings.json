@@ -10,7 +10,7 @@
     "board/esp32s3-builtin.cfg"
   ],
   "idf.flashType": "UART",
-  "idf.port": "/dev/ttyUSB0",
+  "idf.port": "/dev/ttyUSB1",
   "files.associations": {
     "esp_system.h": "c",
     "esp_flash.h": "c",
@@ -108,7 +108,7 @@
     "*.in": "c"
   },
   "C_Cpp.errorSquiggles": "enabled",
-  "idf.currentSetup": "/home/libchara/.espressif/v5.5.4/esp-idf",
+  "idf.currentSetup": "/home/libchara/.espressif/v5.5.5/esp-idf",
   "clangd.path": "/home/libchara/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
   "clangd.arguments": [
     "--background-index",
