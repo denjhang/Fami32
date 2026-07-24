@@ -65,9 +65,15 @@ const uint16_t NOISE_PERIODS[16] = {
 constexpr int NOISE_OVERSAMPLE_MAX = 64;
 constexpr int FIR_HALF_TAPS = FIR_TAPS / 2;
 constexpr int16_t FIR_COEFS[FIR_HALF_TAPS + 1] = {
-    14, 242, 1021, 1542
+    164, 634, 773, 954
 };
 static_assert((FIR_TAPS & 1) == 1, "FIR_TAPS must be odd");
+static_assert(
+    FIR_COEFS[FIR_HALF_TAPS] +
+        2 * (FIR_COEFS[0] + FIR_COEFS[1] + FIR_COEFS[2]) ==
+        (1 << FIR_COEF_SHIFT),
+    "FIR coefficients must have unity DC gain"
+);
 
 float midi_note_to_freq(uint8_t midi_note) {
     return BASE_FREQ_HZ * exp2f(((float)midi_note - 69.0f) / 12.0f);
