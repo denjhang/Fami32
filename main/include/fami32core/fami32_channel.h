@@ -12,7 +12,10 @@ private:
     FTM_FILE *ftm_data;
     FAMI_INSTRUMENT inst_proc;
 
-    uint32_t phase_acc = 0;
+    int i_pos;
+    float f_pos;
+
+    float pos_count;
 
     float freq = 0;
     float period = 0;
@@ -24,12 +27,12 @@ private:
     uint8_t noise_rate = 0;
     uint8_t noise_rate_rel = 0;
     uint16_t noise_shift_reg = 1;
-    uint32_t noise_phase = 0;
+    float noise_timer = 0.0f;
     float noise_period = 4.0f;
     uint8_t triangle_hold_level = 8;
 
     int sample_pos = 0;
-    uint32_t sample_phase = 0;
+    float sample_fpos = 0.0f;
     uint8_t sample_pitch = 0;
     int sample_num = 0;
     bool sample_status = false;
@@ -106,7 +109,7 @@ private:
     uint16_t vrc7_fnum = 0;
     uint8_t vrc7_block = 0;
 
-    uint32_t fds_phase = 0;
+    float fds_pos = 0.0f;
     uint8_t fds_wave[FAMI32_FDS_WAVE_SIZE] = {0};
     uint8_t fds_mod[FAMI32_FDS_MOD_SIZE] = {0};
     uint32_t fds_mod_speed = 0;
@@ -115,7 +118,7 @@ private:
     uint32_t fds_mod_counter = 0;
     bool fds_gate = false;
 
-    uint32_t n163_phase = 0;
+    float n163_pos = 0.0f;
     uint8_t n163_wave[FAMI32_N163_WAVE_SIZE] = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,
         15,14,13,12,11,10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
@@ -230,7 +233,7 @@ private:
     void reset_fir_state();
     void reset_noise_state();
     void update_noise_period();
-    bool next_noise_bit(bool short_mode, uint32_t phase_step);
+    bool next_noise_bit(bool short_mode, float step);
     void sync_vrc7_instrument();
     void sync_fds_instrument();
     void sync_n163_instrument();

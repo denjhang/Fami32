@@ -63,30 +63,11 @@ const uint16_t NOISE_PERIODS[16] = {
     160, 128, 96, 64, 32, 16, 8, 4
 };
 constexpr int NOISE_OVERSAMPLE_MAX = 64;
-constexpr float PHASE_SCALE = 4294967296.0f;
 constexpr int FIR_HALF_TAPS = FIR_TAPS / 2;
 constexpr int16_t FIR_COEFS[FIR_HALF_TAPS + 1] = {
     14, 242, 1021, 1542
 };
 static_assert((FIR_TAPS & 1) == 1, "FIR_TAPS must be odd");
-
-uint32_t phase_step_from_cycles(float cycles_per_sample) {
-    if (cycles_per_sample <= 0.0f) {
-        return 0;
-    }
-    if (cycles_per_sample >= 1.0f) {
-        return UINT32_MAX;
-    }
-    return (uint32_t)(cycles_per_sample * PHASE_SCALE + 0.5f);
-}
-
-uint8_t wave_phase_index(uint32_t phase) {
-    return (uint8_t)(phase >> 27);
-}
-
-uint8_t fds_phase_index(uint32_t phase) {
-    return (uint8_t)(phase >> 26);
-}
 
 float midi_note_to_freq(uint8_t midi_note) {
     return BASE_FREQ_HZ * exp2f(((float)midi_note - 69.0f) / 12.0f);
@@ -181,7 +162,7 @@ void FAMI_CHANNEL::clear_all_fx_flag() {
 
     freq = 0;
     period = 0;
-    phase_acc = 0;
+    pos_count = 0;
 
     if (mode == VRC7_FM || mode == FDS_WAVE || mode == N163_WAVE || is_vrc6_mode(mode)) {
         chl_mode = mode;
@@ -235,7 +216,7 @@ void FAMI_CHANNEL::clear_all_fx_flag() {
     arp_fixed_active = false;
 
     sample_pos = 0;
-    sample_phase = 0;
+    sample_fpos = 0;
     sample_var = 0;
     dmc_hold_level = 0;
     sample_num = 0;
@@ -258,13 +239,13 @@ void FAMI_CHANNEL::clear_all_fx_flag() {
 
     if (mode == FDS_WAVE) {
         fds_gate = false;
-        fds_phase = 0;
+        fds_pos = 0.0f;
         fds_mod_counter = 0;
     }
 
     if (mode == N163_WAVE) {
         n163_gate = false;
-        n163_phase = 0;
+        n163_pos = 0.0f;
         n163_wave_index = 0;
     }
 
@@ -294,7 +275,7 @@ void FAMI_CHANNEL::reset_fir_state() {
 
 void FAMI_CHANNEL::reset_noise_state() {
     noise_shift_reg = 1;
-    noise_phase = 0;
+    noise_timer = 0.0f;
     update_noise_period();
 }
 
@@ -336,12 +317,12 @@ void FAMI_CHANNEL::update_noise_period() {
     }
 }
 
-bool FAMI_CHANNEL::next_noise_bit(bool short_mode, uint32_t phase_step) {
+bool FAMI_CHANNEL::next_noise_bit(bool short_mode, float step) {
+    noise_timer += step;
     uint8_t feedback_bit = short_mode ? 6 : 1;
-    uint32_t old_phase = noise_phase;
-    noise_phase += phase_step;
 
-    if (noise_phase < old_phase) {
+    while (noise_timer >= noise_period) {
+        noise_timer -= noise_period;
         uint16_t feedback = ((noise_shift_reg & 1) ^ ((noise_shift_reg >> feedback_bit) & 1)) << 14;
         noise_shift_reg = (noise_shift_reg >> 1) | feedback;
     }
@@ -511,16 +492,18 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                 uint8_t mod_value = fds_mod[mod_index] & 7;
                 mod_scale += (float)(FDS_MOD_BIAS[mod_value] * (int32_t)(fds_mod_depth & 0x3F)) / 32768.0f;
             }
-            uint32_t fds_phase_step = phase_step_from_cycles((freq * mod_scale) / SAMP_RATE);
+            float fds_pos_count = ((freq * mod_scale) / SAMP_RATE) * 64.0f;
+            if (fds_pos_count < 0.0f) fds_pos_count = 0.0f;
 
             int32_t sample = 0;
             if (fds_gate && fds_volume) {
-                uint8_t wave_index = fds_phase_index(fds_phase) & (FAMI32_FDS_WAVE_SIZE - 1);
+                uint8_t wave_index = ((uint32_t)fds_pos) & (FAMI32_FDS_WAVE_SIZE - 1);
                 int32_t centered = (int32_t)(fds_wave[wave_index] & 0x3F) - 32;
                 // Match FDS mixing closer to FamiTracker: the previous
                 // lightweight path was about 6 dB too quiet.
                 sample = (centered * (int32_t)rel_vol) >> 1;
-                fds_phase += fds_phase_step;
+                fds_pos += fds_pos_count;
+                while (fds_pos >= 64.0f) fds_pos -= 64.0f;
                 fds_mod_counter += fds_mod_speed ? fds_mod_speed : 1;
             }
             tick_buf[i] = clamp_i16(sample);
@@ -548,13 +531,13 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
         if (period_rely < 15.0f) period_rely = 15.0f;
         if (period_rely > 65535.0f) period_rely = 65535.0f;
         freq = n163_period_to_freq(period_rely, current_n163_channels(ftm_data));
-        uint32_t phase_step = phase_step_from_cycles(freq / ((float)SAMP_RATE * oversample));
         uint8_t meter = (rel_vol + 7) / 15;
         if (meter > 15) meter = 15;
         uint8_t wave_size = n163_wave_size;
         if (wave_size < 1 || wave_size > FAMI32_N163_WAVE_SIZE) {
             wave_size = FAMI32_N163_WAVE_SIZE;
         }
+        float rel_pos_count = ((freq / SAMP_RATE) * wave_size) / oversample;
 
         for (int i = 0; i < tick_length; i++) {
             int32_t pcm_out = 0;
@@ -563,11 +546,12 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                 int32_t pcm_sub = 0;
                 uint8_t level_sub = 0;
                 if (n163_gate && rel_vol) {
-                    uint8_t wave_index = (uint8_t)(((uint64_t)n163_phase * wave_size) >> 32);
+                    uint8_t wave_index = (uint8_t)n163_pos;
                     int32_t centered = (int32_t)(n163_wave[wave_index] & 0x0F) - 8;
                     pcm_sub = centered * (int32_t)rel_vol;
                     level_sub = centered >= 0 ? meter : 0;
-                    n163_phase += phase_step;
+                    n163_pos += rel_pos_count;
+                    while (n163_pos >= wave_size) n163_pos -= wave_size;
                 }
                 level_acc += level_sub;
                 fir_push(pcm_fir_state, pcm_sub);
@@ -602,7 +586,8 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
         if (period_rely < 12.0f) period_rely = 12.0f;
         if (period_rely > 4095.0f) period_rely = 4095.0f;
         freq = period2freq(period_rely);
-        uint32_t phase_step = phase_step_from_cycles(freq / ((float)SAMP_RATE * oversample));
+        pos_count = (freq / SAMP_RATE) * 32.0f;
+        float rel_pos_count = pos_count / oversample;
         uint8_t vrc6_meter = (rel_vol + 7) / 15;
         if (vrc6_meter > 15) vrc6_meter = 15;
 
@@ -613,11 +598,16 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                 int32_t pcm_sub = 0;
                 uint8_t apu_sub = 0;
                 if (rel_vol) {
-                    uint8_t wave_index = wave_phase_index(phase_acc);
-                    int8_t wave = wave_table[mode][wave_index];
+                    i_pos &= 31;
+                    int8_t wave = wave_table[mode][i_pos];
                     pcm_sub = wave * rel_vol;
                     apu_sub = (wave >= 0) ? vrc6_meter : 0;
-                    phase_acc += phase_step;
+                    f_pos += rel_pos_count;
+                    if (f_pos >= 1.0f) {
+                        int step = (int)f_pos;
+                        i_pos += step;
+                        f_pos -= step;
+                    }
                 }
                 apu_acc += apu_sub;
                 fir_push(pcm_fir_state, pcm_sub);
@@ -644,6 +634,7 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
     if (is_tone_mode(mode)) {
         period_rely = period - period_offset;
         freq = period2freq(period_rely);
+        pos_count = (freq / SAMP_RATE) * 32;
 
         if (vib_spd && vib_dep) {
             if (advance_tick_phase) {
@@ -651,16 +642,17 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
             }
             int8_t vib_var = (vib_table[vib_pos] * vib_dep) / 16;
             period_rely = period - period_offset + vib_var;
-            freq = period2freq(period_rely);
+            pos_count = (period2freq(period_rely) / SAMP_RATE) * 32;
         }
 
         if (mode == TRIANGULAR) {
             rel_vol = rel_vol ? 225 : 0;
         }
         // DBG_PRINTF("(DEBUG: VOL) GET_ENV: %d->%d\n", inst_proc.get_pos(VOL_SEQU), inst_proc.get_sequ_var(VOL_SEQU));
-        float cycles_per_subsample = freq / ((float)SAMP_RATE * oversample);
-        if (mode == TRIANGULAR) cycles_per_subsample *= 0.5f;
-        uint32_t phase_step = phase_step_from_cycles(cycles_per_subsample);
+        float rel_pos_count;
+        if (mode == TRIANGULAR) rel_pos_count = pos_count / 2 / oversample;
+
+        else rel_pos_count = pos_count / oversample;
         uint8_t nes_vol = (rel_vol + 7) / 15;
         if (nes_vol > 15) nes_vol = 15;
 
@@ -675,8 +667,8 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                 uint8_t apu_sub = (mode == TRIANGULAR) ? triangle_hold_level : 0;
 
                 if (rel_vol) {
-                    uint8_t wave_index = wave_phase_index(phase_acc);
-                    int8_t wave = wave_table[mode][wave_index];
+                    i_pos = i_pos & 31;
+                    int8_t wave = wave_table[mode][i_pos];
 
                     pcm_sub = wave * rel_vol;
 
@@ -687,7 +679,12 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                         apu_sub = (wave >= 0) ? nes_vol : 0;
                     }
 
-                    phase_acc += phase_step;
+                    f_pos += rel_pos_count;
+                    if (f_pos >= 1.0f) {
+                        int step = (int)f_pos;
+                        i_pos += step;
+                        f_pos -= step;
+                    }
                 }
 
                 fir_push(pcm_fir_state, pcm_sub);
@@ -713,7 +710,7 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                noise_period * (float)noise_oversample < 1.0f) {
             noise_oversample++;
         }
-        uint32_t noise_phase_step = phase_step_from_cycles(1.0f / (noise_period * noise_oversample));
+        float noise_step = 1.0f / (float)noise_oversample;
         bool short_mode = mode == NOISE1;
 
         for (int i = 0; i < tick_length; i++) {
@@ -721,7 +718,7 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
             int32_t level_out = 0;
 
             for (int j = 0; j < noise_oversample; j++) {
-                bool noise_bit = next_noise_bit(short_mode, noise_phase_step);
+                bool noise_bit = next_noise_bit(short_mode, noise_step);
                 int32_t pcm_sub = (((noise_bit ? -128 : 127) * (int32_t)rel_vol) >> 4);
                 int32_t level_sub = noise_bit ? 0 : nes_vol;
 
@@ -738,7 +735,7 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
             apu_level_buf[i] = clamp_apu_level(level_out, 15);
         }
     } else if (mode == DPCM_SAMPLE) {
-        uint32_t sample_phase_step = phase_step_from_cycles((float)dpcm_pitch_table[sample_pitch] / SAMP_RATE);
+        float count = dpcm_pitch_table[sample_pitch] / SAMP_RATE;
         if (sample_num >= 0 && sample_num < (int)ftm_data->dpcm_samples.size()) {
             const std::vector<uint8_t> &pcm = ftm_data->dpcm_samples[sample_num].pcm_data;
             uint8_t *sample = ftm_data->dpcm_samples[sample_num].pcm_data.data();
@@ -760,10 +757,10 @@ void FAMI_CHANNEL::make_tick_sound(bool advance_tick_phase) {
                     }
                     sample_var = sample[sample_pos];
                     dmc_hold_level = sample_var & 0x7f;
-                    uint32_t old_phase = sample_phase;
-                    sample_phase += sample_phase_step;
-                    if (sample_phase < old_phase) {
-                        sample_pos++;
+                    sample_fpos += count;
+                    if (sample_fpos > 1.0f) {
+                        sample_pos += (int)sample_fpos;
+                        sample_fpos -= (int)sample_fpos;
                         if (sample_pos >= sample_len) {
                             if (sample_loop) {
                                 sample_pos = 0;
@@ -1016,7 +1013,7 @@ void FAMI_CHANNEL::note_start() {
     arp_relative_note = base_note;
     arp_fixed_active = false;
     if (mode == DPCM_SAMPLE) {
-        sample_phase = 0;
+        sample_fpos = 0;
         sample_pos = sample_start * 512;
         sample_status = (sample_num >= 0 && sample_pos < sample_len);
     } else if (mode == VRC7_FM) {
@@ -1030,7 +1027,7 @@ void FAMI_CHANNEL::note_start() {
         sync_fds_instrument();
         inst_proc.start();
         fds_gate = true;
-        fds_phase = 0;
+        fds_pos = 0.0f;
         fds_mod_counter = 0;
         portup_speed = 0;
         portdown_speed = 0;
@@ -1038,13 +1035,14 @@ void FAMI_CHANNEL::note_start() {
         sync_n163_instrument();
         inst_proc.start();
         n163_gate = true;
-        n163_phase = 0;
+        n163_pos = 0.0f;
         portup_speed = 0;
         portdown_speed = 0;
     } else {
         inst_proc.start();
         portup_speed = 0;
         portdown_speed = 0;
+        // i_pos = 8;
     }
 }
 
@@ -1145,6 +1143,7 @@ void FAMI_CHANNEL::set_period(float period_ref) {
 void FAMI_CHANNEL::set_freq(float freq_ref) {
     freq = freq_ref;
     period = (mode == N163_WAVE) ? n163_freq_to_period(freq, current_n163_channels(ftm_data)) : freq2period(freq);
+    pos_count = (freq / SAMP_RATE) * 32;
 }
 
 void FAMI_CHANNEL::set_note_rely(uint8_t note) {
@@ -1163,9 +1162,11 @@ void FAMI_CHANNEL::set_note_rely(uint8_t note) {
     } else if (is_vrc6_mode(mode)) {
         rely_note = note;
         period = note2period(note);
+        pos_count = (freq / SAMP_RATE) * 32;
     } else if (is_tone_mode(mode)) {
         rely_note = note;
         period = note2period(note);
+        pos_count = (freq / SAMP_RATE) * 32;
     } else if (mode == DPCM_SAMPLE) {
         instrument_t *inst = inst_proc.get_inst();
         if (inst == NULL || note < 24 || note >= 120) {
@@ -1480,7 +1481,7 @@ void FAMI_CHANNEL::set_note(uint8_t note) {
     last_note = base_note;
     base_note = note;
     arp_relative_note = note;
-    // DBG_PRINTF("SET_NOTE: P=%f, F=%f\n", period, freq);
+    // DBG_PRINTF("SET_NOTE: P=%f, F=%f, C=%f\n", period, freq, pos_count);
 }
 
 void FAMI_CHANNEL::set_vol(int8_t vol) {
