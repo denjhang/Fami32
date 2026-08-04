@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 
+#ifdef FAMI32_DESKTOP
+#define FAMI32_STORAGE_DIR "./fami32_data"
+#else
+#define FAMI32_STORAGE_DIR "/flash"
+#endif
+
 // KEYPAD
 #define KEY_UP 3
 #define KEY_DOWN 9

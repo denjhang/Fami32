@@ -22,6 +22,11 @@
  */
 
 #include "WString.h"
+#ifdef FAMI32_DESKTOP
+typedef const char *PGM_P;
+#define strlen_P strlen
+#define memcpy_P memcpy
+#endif
 extern "C" {
     #include "stdio.h"
     #include "stdlib_noniso.h"

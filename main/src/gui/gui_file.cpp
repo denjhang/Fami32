@@ -49,16 +49,6 @@ private:
     bool keypad_suspended_ = false;
 };
 
-void free_namelist(struct dirent **namelist, int n) {
-    if (!namelist) {
-        return;
-    }
-    for (int i = 0; i < n; ++i) {
-        free(namelist[i]);
-    }
-    free(namelist);
-}
-
 int compare_file_entries(const void *lhs, const void *rhs) {
     const FileEntry *a = static_cast<const FileEntry *>(lhs);
     const FileEntry *b = static_cast<const FileEntry *>(rhs);
@@ -299,8 +289,6 @@ bool open_selected_ftm_file(const char *file, void *user) {
 // File selection UI: Browse files and directories starting from basePath. Returns chosen file path or NULL if cancelled.
 const char* file_select(const char *basePath, file_select_accept_fn accept, void *user) {
     display.setFont(&rismol35);
-    struct dirent **namelist = NULL;
-    int n = 0;
 
     static char current_path[PATH_MAX];
     strncpy(current_path, basePath, PATH_MAX - 1);
@@ -319,12 +307,6 @@ const char* file_select(const char *basePath, file_select_accept_fn accept, void
 
     for (;;) {
         if (directory_changed) {
-            // Free previous scan results
-            if (namelist) {
-                free_namelist(namelist, n);
-                namelist = NULL;
-                n = 0;
-            }
             // Open current directory
             DIR *dir = opendir(current_path);
             if (!dir) {
@@ -339,31 +321,20 @@ const char* file_select(const char *basePath, file_select_accept_fn accept, void
                 vTaskDelay(1024);
                 return NULL;
             }
-            // Scan directory entries
-            n = scandir(current_path, &namelist, NULL, alphasort);
-            closedir(dir);
-            if (n < 0) {
-                display.clearDisplay();
-                display.setTextSize(1);
-                display.setTextColor(1);
-                display.setCursor(0, 0);
-                display.print("ERROR READING DIRECTORY");
-                display.display();
-                vTaskDelay(1024);
-                return NULL;
-            }
             // Populate cache
             dir_cache_size = 0;
-            for (int i = 0; i < n && dir_cache_size < kMaxDirEntries; ++i) {
-                if (strcmp(namelist[i]->d_name, ".") == 0 || strcmp(namelist[i]->d_name, "..") == 0) {
+            struct dirent *entry;
+            while (dir_cache_size < kMaxDirEntries && (entry = readdir(dir)) != NULL) {
+                if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
                     continue;
                 }
-                snprintf(dir_cache[dir_cache_size].name, sizeof(dir_cache[dir_cache_size].name), "%s", namelist[i]->d_name);
-                build_child_path(fullpath, sizeof(fullpath), current_path, namelist[i]->d_name);
+                snprintf(dir_cache[dir_cache_size].name, sizeof(dir_cache[dir_cache_size].name), "%s", entry->d_name);
+                build_child_path(fullpath, sizeof(fullpath), current_path, entry->d_name);
                 struct stat st;
                 dir_cache[dir_cache_size].is_dir = (stat(fullpath, &st) == 0 && S_ISDIR(st.st_mode));
                 dir_cache_size++;
             }
+            closedir(dir);
             qsort(dir_cache, dir_cache_size, sizeof(dir_cache[0]), compare_file_entries);
             selected = 0;
             top = 0;
@@ -444,10 +415,6 @@ const char* file_select(const char *basePath, file_select_accept_fn accept, void
                                 if (accept && !accept(selected_file, user)) {
                                     break;
                                 }
-                                // Clean up name list memory
-                                free_namelist(namelist, n);
-                                namelist = NULL;
-                                n = 0;
                                 return selected_file;
                             }
                         }
@@ -455,7 +422,6 @@ const char* file_select(const char *basePath, file_select_accept_fn accept, void
                     case KEY_BACK:
                         // Go up to parent directory or exit if at base
                         if (strcmp(current_path, basePath) == 0) {
-                            free_namelist(namelist, n);
                             return NULL;
                         }
                         // Remove last path component
@@ -490,7 +456,7 @@ const char* file_select(const char *basePath, file_select_accept_fn accept, void
 void open_file_page() {
     drawPopupBox("LOADING...");
     pause_sound();
-    const char* file = file_select("/flash", open_selected_ftm_file, NULL);
+    const char* file = file_select(FAMI32_STORAGE_DIR, open_selected_ftm_file, NULL);
     if (file == NULL) {
         return; // user cancelled
     }
@@ -529,7 +495,7 @@ void export_vgm_page() {
     }
 
     displayKeyboard("EXPORT VGM...", current_name, 255);
-    snprintf(target_path, sizeof(target_path), "/flash/%s.vgm", current_name);
+    snprintf(target_path, sizeof(target_path), FAMI32_STORAGE_DIR "/%s.vgm", current_name);
     ESP_LOGI("VGM_EXPORT", "Export NES VGM to %s", target_path);
 
     drawPopupBox("EXPORTING VGM...");
@@ -581,7 +547,7 @@ void menu_file() {
                 strcpy(current_name, "Untitled");
                 displayKeyboard("SAVE...", current_name, 255);
                 ESP_LOGI("FILE", "Save name: %s", current_name);
-                snprintf(target_path, sizeof(target_path), "/flash/%s.ftm", current_name);
+                snprintf(target_path, sizeof(target_path), FAMI32_STORAGE_DIR "/%s.ftm", current_name);
                 drawPopupBox("WRITING...");
                 display.display();
                 ftm.save_as_ftm(target_path);
@@ -600,7 +566,7 @@ void menu_file() {
             }
             displayKeyboard("SAVE AS...", current_name, 255);
             ESP_LOGI("FILE", "Save As name: %s", current_name);
-            snprintf(target_path, sizeof(target_path), "/flash/%s.ftm", current_name);
+            snprintf(target_path, sizeof(target_path), FAMI32_STORAGE_DIR "/%s.ftm", current_name);
             drawPopupBox("WRITING...");
             display.display();
             ftm.save_as_ftm(target_path);

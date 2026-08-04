@@ -22,6 +22,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#ifdef FAMI32_DESKTOP
+#include <stdarg.h>
+#endif
 #include "WString.h"
 #include "Printable.h"
 
@@ -72,7 +75,13 @@ public:
         return write((const uint8_t *) buffer, size);
     }
 
+#ifdef FAMI32_DESKTOP
+    size_t vprintf(const char *format, va_list arg);
+    size_t printf(const char *format, ...) __attribute__((format(printf, 2, 3)));
+    size_t printf(const __FlashStringHelper *format, ...);
+#else
     //size_t printf(const char * format, ...)  __attribute__ ((format (printf, 2, 3)));
+#endif
     size_t print(const __FlashStringHelper *);
     size_t print(const String &);
     size_t print(const char[]);

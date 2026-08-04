@@ -9,12 +9,18 @@
 #include <cstdlib>
 
 // Platform/Framework specific includes (ESP32 and device drivers)
+#ifdef FAMI32_DESKTOP
+#include "desktop_platform.h"
+#else
 #include <esp_log.h>
 #include <esp_system.h>
 #include <driver/i2s_std.h>
+#endif
 #include <gfx_oled_ssd1306.h>
 #include "keypad_io.h"
+#ifndef FAMI32_DESKTOP
 #include <MPR121_Keypad.h>
+#endif
 #include <USBMIDI.h>
 #include "ringbuf.h"
 #include "fami32_pin.h"

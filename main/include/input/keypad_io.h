@@ -37,6 +37,10 @@ public:
     keypadEvent read();
     void clear();
 
+#ifdef FAMI32_DESKTOP
+    void inject(uint8_t key, uint8_t event);
+#endif
+
 private:
     void pushEvent(const keypadEvent &event);
     int findKeyIndex(uint8_t key) const;

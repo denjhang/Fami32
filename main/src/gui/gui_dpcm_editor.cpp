@@ -441,7 +441,7 @@ void sample_option_page(int *selected_sample) {
     int ret = menu("DPCM SAMPLE", menu_str, 4, NULL, 72, 45, 0, 0, 0);
 
     if (ret == 0) {
-        const char *path = file_select("/flash");
+        const char *path = file_select(FAMI32_STORAGE_DIR);
         if (path != NULL) {
             drawPopupBox("IMPORTING...");
             if (import_sample(path)) {

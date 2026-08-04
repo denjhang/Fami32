@@ -10,7 +10,7 @@
     "board/esp32s3-builtin.cfg"
   ],
   "idf.flashType": "UART",
-  "idf.port": "/dev/ttyUSB1",
+  "idf.port": "/dev/ttyUSB0",
   "files.associations": {
     "esp_system.h": "c",
     "esp_flash.h": "c",
